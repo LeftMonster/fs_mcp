@@ -1,13 +1,17 @@
-from mcp.server.fastmcp import FastMCP
-
-# Initialize FastMCP server
-mcp = FastMCP("claude_local_workspace")
-
 ############################# 项目上下文获取
 import os
 import json
 import base64
 import logging
+
+from bs4 import BeautifulSoup, Comment
+import re
+
+from mcp.server.fastmcp import FastMCP
+
+# Initialize FastMCP server
+mcp = FastMCP("claude_local_workspace")
+
 
 
 logger = logging.getLogger('default')
@@ -214,6 +218,62 @@ def write_to_file(project_path:str, relative_path:str, file_name:str, write_mode
             参考with open的模式、此处可以直接填写、这里默认为"w"模式，也可选a、a+、wb等等
     """
     pass
+
+
+
+@mcp.tool()
+def clean_html(
+    html: str,
+    remove_tags: list[str] = None,
+    remove_attrs: list[str] = None,
+    remove_comments: bool = True,
+    compress_whitespace: bool = True
+) -> str:
+    """
+    清理 HTML 文本，支持自定义删除标签、属性、注释与压缩空白字符。
+    用于在分析过程中、压缩html文档，减少token消耗
+
+    Args:
+        html (str): 原始 HTML 文本。
+        remove_tags (list[str], optional): 要删除的标签名列表，例如 ['script', 'style']。
+        remove_attrs (list[str], optional): 要从所有标签中删除的属性名列表，例如 ['style', 'onclick']。
+        remove_comments (bool, optional): 是否删除 HTML 注释。默认为 True。
+        compress_whitespace (bool, optional): 是否压缩空白字符（空格、换行）。默认为 True。
+
+    Returns:
+        str: 清理后的 HTML 字符串。
+    """
+    # 默认配置
+    remove_tags = remove_tags or ['script', 'style']
+    remove_attrs = remove_attrs or ['style']
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 删除指定标签
+    for tag in soup.find_all(remove_tags):
+        tag.decompose()
+
+    # 删除指定属性
+    for tag in soup.find_all(True):
+        for attr in remove_attrs:
+            if attr in tag.attrs:
+                del tag.attrs[attr]
+
+    # 删除注释
+    if remove_comments:
+        for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+            comment.extract()
+
+    # 转为字符串
+    cleaned_html = str(soup)
+
+    # 压缩空白字符（多个换行与空格）
+    if compress_whitespace:
+        cleaned_html = re.sub(r"\s*\n\s*", "\n", cleaned_html)   # 清理多余换行周围空格
+        cleaned_html = re.sub(r"[ \t]+", " ", cleaned_html)      # 替换多个空格为1个
+        cleaned_html = re.sub(r"\n{2,}", "\n", cleaned_html)     # 多个换行变一个
+
+    return cleaned_html.strip()
 
 
 
