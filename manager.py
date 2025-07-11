@@ -277,6 +277,104 @@ def clean_html(
 
 
 
+import ast
+from typing import Any, Dict, List
+
+
+def get_arg_info(arg: ast.arg, default: Any, annotation: Any) -> Dict[str, Any]:
+    return {
+        "name": arg.arg,
+        "type": ast.unparse(annotation) if annotation else None,
+        "default": ast.unparse(default) if default else None
+    }
+
+
+def extract_class_info(node: ast.ClassDef) -> Dict[str, Any]:
+    class_info = {
+        "name": node.name,
+        "docstring": ast.get_docstring(node),
+        "lineno": node.lineno,
+        "end_lineno": getattr(node, 'end_lineno', None),
+        "methods": [],
+        "classes": []
+    }
+
+    for child in node.body:
+        if isinstance(child, ast.FunctionDef):
+            class_info["methods"].append(extract_function_info(child))
+        elif isinstance(child, ast.ClassDef):  # 嵌套类
+            class_info["classes"].append(extract_class_info(child))
+
+    return class_info
+
+
+def extract_function_info(node: ast.FunctionDef) -> Dict[str, Any]:
+    args_info = []
+    defaults = [None] * (len(node.args.args) - len(node.args.defaults)) + node.args.defaults
+
+    for arg, default in zip(node.args.args, defaults):
+        args_info.append(get_arg_info(arg, default, arg.annotation))
+
+    return {
+        "name": node.name,
+        "docstring": ast.get_docstring(node),
+        "lineno": node.lineno,
+        "end_lineno": getattr(node, 'end_lineno', None),
+        "args": args_info,
+        "returns": ast.unparse(node.returns) if node.returns else None
+    }
+
+@mcp.tool()
+def analyze_python_file(filepath: str) -> Dict[str, Any]:
+    """
+    分析 Python 文件，提取函数、类（含嵌套类）、方法、常量等定义结构与元信息。
+
+    Returns:
+        dict: 包含所有结构信息。
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        source = f.read()
+
+    tree = ast.parse(source)
+    result = {
+        "functions": [],
+        "classes": [],
+        "constants": []
+    }
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef):
+            result["functions"].append(extract_function_info(node))
+        elif isinstance(node, ast.ClassDef):
+            result["classes"].append(extract_class_info(node))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    result["constants"].append({
+                        "name": target.id,
+                        "lineno": node.lineno,
+                        "value": ast.unparse(node.value)
+                    })
+
+    return result
+
+@mcp.tool()
+def read_lines_from_file(filepath: str, start_line: int, end_line: int) -> str:
+    """
+    读取 Python 文件中从 start_line 到 end_line 的内容（包含边界）。
+
+    Args:
+        filepath (str): 文件路径。
+        start_line (int): 起始行（1-based）。
+        end_line (int): 结束行（1-based）。
+
+    Returns:
+        str: 指定行的代码字符串。
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        return ''.join(lines[start_line - 1:end_line])
+
 
 
 # 示例用法
