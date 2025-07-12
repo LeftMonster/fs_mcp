@@ -4,7 +4,9 @@ import json
 import base64
 import logging
 from pathlib import Path
-from typing import List
+
+import ast
+from typing import Any, Dict, List
 
 from bs4 import BeautifulSoup, Comment
 import re
@@ -217,14 +219,6 @@ def read_file_content(project_path, relative_path) -> dict:
         }
 
 
-def write_to_file(project_path:str, relative_path:str, file_name:str, write_mode:str="w") -> bool:
-    """
-        write_mode:
-            参考with open的模式、此处可以直接填写、这里默认为"w"模式，也可选a、a+、wb等等
-    """
-    pass
-
-
 
 @mcp.tool()
 def clean_html(
@@ -282,8 +276,7 @@ def clean_html(
 
 
 
-import ast
-from typing import Any, Dict, List
+
 
 
 def get_arg_info(arg: ast.arg, default: Any, annotation: Any) -> Dict[str, Any]:
@@ -395,7 +388,9 @@ def write_in_local_file(filepath: str, lines: List[str]) -> None:
         - 自动创建缺失的中间目录。
         - 使用 writelines 写入，性能更优。
     """
-    base_dir = Path(os.getcwd()).resolve()
+    # base_dir = Path(os.getcwd()).resolve()
+    # target_path = (base_dir / filepath).resolve()
+    base_dir = Path(PROJECT_ROOT).resolve()
     target_path = (base_dir / filepath).resolve()
 
     # 安全检查，禁止穿越目录
