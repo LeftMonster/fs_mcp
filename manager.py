@@ -1,19 +1,25 @@
+############################# 项目上下文获取
+import os
+import json
+import base64
 import logging
+from pathlib import Path
+from typing import List
+
+from bs4 import BeautifulSoup, Comment
+import re
 
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
 mcp = FastMCP("claude_local_workspace")
 
-############################# 项目上下文获取
-import os
-import json
-import base64
-import logging
 
-logger = logging.getLogger(__file__)
 
+logger = logging.getLogger('default')
 # 设置项目根目录
+# TODO 将参数设置为命令行接收的参数—即路径
+# PROJECT_ROOT = "D:\\github\\workspace"
 PROJECT_ROOT = "D:\\workspace"
 
 # 忽略常见的临时文件、构建目录等
@@ -211,6 +217,198 @@ def read_file_content(project_path, relative_path) -> dict:
         }
 
 
+def write_to_file(project_path:str, relative_path:str, file_name:str, write_mode:str="w") -> bool:
+    """
+        write_mode:
+            参考with open的模式、此处可以直接填写、这里默认为"w"模式，也可选a、a+、wb等等
+    """
+    pass
+
+
+
+@mcp.tool()
+def clean_html(
+    html: str,
+    remove_tags: list[str] = None,
+    remove_attrs: list[str] = None,
+    remove_comments: bool = True,
+    compress_whitespace: bool = True
+) -> str:
+    """
+    清理 HTML 文本，支持自定义删除标签、属性、注释与压缩空白字符。
+    用于在分析过程中、压缩html文档，减少token消耗
+
+    Args:
+        html (str): 原始 HTML 文本。
+        remove_tags (list[str], optional): 要删除的标签名列表，例如 ['script', 'style']。
+        remove_attrs (list[str], optional): 要从所有标签中删除的属性名列表，例如 ['style', 'onclick']。
+        remove_comments (bool, optional): 是否删除 HTML 注释。默认为 True。
+        compress_whitespace (bool, optional): 是否压缩空白字符（空格、换行）。默认为 True。
+
+    Returns:
+        str: 清理后的 HTML 字符串。
+    """
+    # 默认配置
+    remove_tags = remove_tags or ['script', 'style']
+    remove_attrs = remove_attrs or ['style']
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 删除指定标签
+    for tag in soup.find_all(remove_tags):
+        tag.decompose()
+
+    # 删除指定属性
+    for tag in soup.find_all(True):
+        for attr in remove_attrs:
+            if attr in tag.attrs:
+                del tag.attrs[attr]
+
+    # 删除注释
+    if remove_comments:
+        for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+            comment.extract()
+
+    # 转为字符串
+    cleaned_html = str(soup)
+
+    # 压缩空白字符（多个换行与空格）
+    if compress_whitespace:
+        cleaned_html = re.sub(r"\s*\n\s*", "\n", cleaned_html)   # 清理多余换行周围空格
+        cleaned_html = re.sub(r"[ \t]+", " ", cleaned_html)      # 替换多个空格为1个
+        cleaned_html = re.sub(r"\n{2,}", "\n", cleaned_html)     # 多个换行变一个
+
+    return cleaned_html.strip()
+
+
+
+import ast
+from typing import Any, Dict, List
+
+
+def get_arg_info(arg: ast.arg, default: Any, annotation: Any) -> Dict[str, Any]:
+    return {
+        "name": arg.arg,
+        "type": ast.unparse(annotation) if annotation else None,
+        "default": ast.unparse(default) if default else None
+    }
+
+
+def extract_class_info(node: ast.ClassDef) -> Dict[str, Any]:
+    class_info = {
+        "name": node.name,
+        "docstring": ast.get_docstring(node),
+        "lineno": node.lineno,
+        "end_lineno": getattr(node, 'end_lineno', None),
+        "methods": [],
+        "classes": []
+    }
+
+    for child in node.body:
+        if isinstance(child, ast.FunctionDef):
+            class_info["methods"].append(extract_function_info(child))
+        elif isinstance(child, ast.ClassDef):  # 嵌套类
+            class_info["classes"].append(extract_class_info(child))
+
+    return class_info
+
+
+def extract_function_info(node: ast.FunctionDef) -> Dict[str, Any]:
+    args_info = []
+    defaults = [None] * (len(node.args.args) - len(node.args.defaults)) + node.args.defaults
+
+    for arg, default in zip(node.args.args, defaults):
+        args_info.append(get_arg_info(arg, default, arg.annotation))
+
+    return {
+        "name": node.name,
+        "docstring": ast.get_docstring(node),
+        "lineno": node.lineno,
+        "end_lineno": getattr(node, 'end_lineno', None),
+        "args": args_info,
+        "returns": ast.unparse(node.returns) if node.returns else None
+    }
+
+@mcp.tool()
+def analyze_python_file(filepath: str) -> Dict[str, Any]:
+    """
+    分析 Python 文件，提取函数、类（含嵌套类）、方法、常量等定义结构与元信息。
+
+    Returns:
+        dict: 包含所有结构信息。
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        source = f.read()
+
+    tree = ast.parse(source)
+    result = {
+        "functions": [],
+        "classes": [],
+        "constants": []
+    }
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef):
+            result["functions"].append(extract_function_info(node))
+        elif isinstance(node, ast.ClassDef):
+            result["classes"].append(extract_class_info(node))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    result["constants"].append({
+                        "name": target.id,
+                        "lineno": node.lineno,
+                        "value": ast.unparse(node.value)
+                    })
+
+    return result
+
+@mcp.tool()
+def read_lines_from_file(filepath: str, start_line: int, end_line: int) -> str:
+    """
+    读取 Python 文件中从 start_line 到 end_line 的内容（包含边界）。
+
+    Args:
+        filepath (str): 文件路径。
+        start_line (int): 起始行（1-based）。
+        end_line (int): 结束行（1-based）。
+
+    Returns:
+        str: 指定行的代码字符串。
+    """
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        return ''.join(lines[start_line - 1:end_line])
+
+
+@mcp.tool()
+def write_in_local_file(filepath: str, lines: List[str]) -> None:
+    """
+    高效地将字符串列表写入本地文件，每行写入一条，限定只能写入当前工作目录及其子目录。
+
+    参数:
+        filepath (str): 相对于当前工作目录的目标文件路径。
+        lines (List[str]): 要写入的字符串列表，每个字符串代表一行。
+
+    安全性:
+        - 防止路径穿越（如 "../"），仅允许在当前目录及其子目录中写入。
+        - 自动创建缺失的中间目录。
+        - 使用 writelines 写入，性能更优。
+    """
+    base_dir = Path(os.getcwd()).resolve()
+    target_path = (base_dir / filepath).resolve()
+
+    # 安全检查，禁止穿越目录
+    if not str(target_path).startswith(str(base_dir)):
+        raise ValueError(f"非法文件路径：{filepath}")
+
+    # 创建中间目录（如果不存在）
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 使用 writelines + 换行符拼接，减少系统调用，性能更优
+    with open(target_path, 'w', encoding='utf-8') as f:
+        f.writelines(line + '\n' for line in lines)
+
 # 示例用法
 if __name__ == "__main__":
     # try:
@@ -239,5 +437,6 @@ if __name__ == "__main__":
     # except Exception as e:
     #     print(f"错误: {str(e)}")
     # # Initialize and run the server
+    logger.info("ready data")
     mcp.run(transport='stdio')
-
+    logger.info("end execute")
